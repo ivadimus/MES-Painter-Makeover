@@ -1264,74 +1264,56 @@ body {
   position: absolute;
   left: 0;
   top: 0;
-  z-index: 2; /* above its own dust clouds */
+  z-index: 2; /* above its own paint drops */
   object-fit: contain;
   filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.4));
   will-change: transform, opacity;
   user-select: none;
 }
 
-/* Soft, lumpy dust cloud: a blurred blob with two smaller lumps. */
+/* Glossy paint drop (small bead). */
 .dust-puff {
   position: absolute;
   z-index: 1;
   pointer-events: none;
   border-radius: 50%;
   background: radial-gradient(
-    circle at 45% 45%,
-    rgba(236, 226, 208, 0.95) 0%,
-    rgba(214, 200, 178, 0.75) 38%,
-    rgba(190, 174, 150, 0.3) 62%,
-    rgba(180, 164, 140, 0) 72%
+    circle at 30% 26%,
+    #fff 0%,
+    rgba(255, 255, 255, 0.85) 6%,
+    var(--drop-mid, #ff3b30) 38%,
+    var(--drop-deep, #c41212) 100%
   );
-  filter: blur(1.5px);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.15);
   opacity: 0;
-  transform: translate(-50%, -50%) scale(0.35);
-  animation: dust-puff var(--puff-dur, 900ms) cubic-bezier(0.2, 0.7, 0.3, 1)
+  transform: translate(-50%, -50%) scale(0.2);
+  animation: dust-puff var(--puff-dur, 520ms) cubic-bezier(0.22, 0.72, 0.28, 1)
     var(--puff-delay, 0ms) forwards;
   will-change: transform, opacity;
-}
-
-.dust-puff::before,
-.dust-puff::after {
-  content: "";
-  position: absolute;
-  border-radius: 50%;
-  background: inherit;
-}
-
-.dust-puff::before {
-  width: 70%;
-  height: 70%;
-  left: -22%;
-  top: 28%;
-}
-
-.dust-puff::after {
-  width: 58%;
-  height: 58%;
-  right: -18%;
-  top: 8%;
 }
 
 @keyframes dust-puff {
   0% {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.35) rotate(0deg);
+    transform: translate(-50%, -50%) scale(0.2);
   }
-  18% {
-    opacity: var(--puff-alpha, 0.8);
-  }
-  55% {
-    opacity: calc(var(--puff-alpha, 0.8) * 0.7);
+  12% {
+    opacity: var(--puff-alpha, 1);
+    transform: translate(
+        calc(-50% + var(--puff-dx, 0px) * 0.15),
+        calc(-50% + var(--puff-dy, 0px) * 0.15)
+      )
+      scale(1);
   }
   100% {
     opacity: 0;
     transform: translate(
         calc(-50% + var(--puff-dx, 0px)),
-        calc(-50% + var(--puff-dy, -20px))
+        calc(-50% + var(--puff-dy, 0px))
       )
-      scale(var(--puff-scale, 1.8)) rotate(var(--puff-rot, 0deg));
+      scale(var(--puff-scale, 0.75));
   }
 }
 
@@ -1938,8 +1920,10 @@ body {
   /** Timeline, as parts of WIPE_MS. */
   const BRUSH_PICKUP_END = 0.08; // icon brush grows in place, right where it stood
   const BRUSH_SWEEP_END = 0.86; // side-to-side sweeping inside the local area
-  /** From here the rest of the piece dissolves, gone exactly when the clean ends. */
-  const BRUSH_FADE_START = 0.78;
+  /** From here the un-brushed remainder dissolves away (noise dissolve). */
+  const BRUSH_FADE_START = 0.68;
+  /** Dissolve noise texel size in stage px (smaller = finer grain). */
+  const DISSOLVE_CELL_PX = 2;
   /** Brush width while cleaning (it grows to this from the icon size). */
   const BRUSH_SIZE_PX = 90;
   /** Radius of the cleaned trail — 30% smaller than the first brush version. */
@@ -2099,43 +2083,98 @@ body {
   brushImage.decoding = "async";
   brushImage.src = BRUSH_IMAGE_URL;
 
+  /** Glossy drop colors: highlight, body, shadow. */
+  const PAINT_COLORS = [
+    ["#ffc2e0", "#ff2d6a", "#d10e48"],
+    ["#ffb8b8", "#ff2a2a", "#b80e0e"],
+    ["#ffd4a8", "#ff7a12", "#d04a00"],
+    ["#fff0a0", "#ffd000", "#d89800"],
+    ["#b8f5c8", "#22d36a", "#0a9840"],
+    ["#b8f0ff", "#00c2f2", "#0088c8"],
+    ["#c8d8ff", "#3d6bff", "#2040d0"],
+    ["#e8c8ff", "#b44dff", "#7818c8"],
+  ];
+
+  const PAINT_DROP_SCALE = 1.2;
+
+  function paintDropCount(n) {
+    return Math.max(1, Math.round(n * PAINT_DROP_SCALE));
+  }
+
+  function paintDropLook(el) {
+    const [hi, mid, deep] =
+      PAINT_COLORS[(Math.random() * PAINT_COLORS.length) | 0];
+    el.style.setProperty("--drop-hi", hi);
+    el.style.setProperty("--drop-mid", mid);
+    el.style.setProperty("--drop-deep", deep);
+  }
+
   /**
-   * Soft dust cloud: puffs up, drifts away (pushed by the brush) and fades.
-   * opts.dx / opts.dy = drift direction, opts.size, opts.delay, opts.duration.
+   * One paint drop: pops out, arcs with gravity, fades.
+   * opts.dx / opts.dy = travel (dy usually positive = fall), opts.size, opts.delay.
    */
   function spawnDustPuff(layer, x, y, opts) {
     const o = opts || {};
-    const size = o.size || 22 + Math.random() * 26;
+    const size = (o.size || 5 + Math.random() * 5) * PAINT_DROP_SCALE;
     const el = document.createElement("span");
     el.className = "dust-puff";
     el.style.left = `${x}px`;
     el.style.top = `${y}px`;
     el.style.width = `${size}px`;
     el.style.height = `${size}px`;
+    paintDropLook(el);
     el.style.setProperty("--puff-dx", `${(o.dx || 0).toFixed(1)}px`);
     el.style.setProperty("--puff-dy", `${(o.dy || 0).toFixed(1)}px`);
-    el.style.setProperty("--puff-scale", (1.5 + Math.random() * 0.9).toFixed(2));
-    el.style.setProperty("--puff-rot", `${Math.round((Math.random() - 0.5) * 90)}deg`);
-    el.style.setProperty("--puff-alpha", (0.6 + Math.random() * 0.3).toFixed(2));
-    const dur = o.duration || 650 + Math.random() * 450;
+    el.style.setProperty("--puff-scale", (0.7 + Math.random() * 0.25).toFixed(2));
+    el.style.setProperty("--puff-alpha", (0.92 + Math.random() * 0.08).toFixed(2));
+    const dur = o.duration || 480 + Math.random() * 220;
     el.style.setProperty("--puff-dur", `${dur}ms`);
     el.style.setProperty("--puff-delay", `${o.delay || 0}ms`);
     layer.appendChild(el);
     window.setTimeout(() => el.remove(), dur + (o.delay || 0) + 80);
   }
 
-  /** Cloud of dust bursting outward, used on tap and when a piece is finished. */
-  function burstDustPuffs(layer, x, y, count, radius) {
-    for (let i = 0; i < count; i++) {
-      const ang = Math.random() * Math.PI * 2;
-      const rad = Math.random() * radius;
-      const push = 30 + Math.random() * 45;
-      spawnDustPuff(layer, x + Math.cos(ang) * rad, y + Math.sin(ang) * rad, {
-        size: 26 + Math.random() * 30,
-        delay: Math.random() * 160,
-        dx: Math.cos(ang) * push,
-        dy: Math.sin(ang) * push - 18,
-      });
+  /**
+   * Scattered colorful drops. opts.radial = full 360° splash outward from center
+   * (used when a piece finishes cleaning).
+   */
+  function burstDustPuffs(layer, x, y, count, radius, opts) {
+    const o = opts || {};
+    const n = paintDropCount(count || 12);
+    const spread = radius || 40;
+
+    for (let i = 0; i < n; i++) {
+      let ang;
+      let px;
+      let py;
+      let dx;
+      let dy;
+      let delay;
+      let size;
+
+      if (o.radial) {
+        ang = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.55;
+        px = x + (Math.random() - 0.5) * 12;
+        py = y + (Math.random() - 0.5) * 12;
+        const dist = spread * (0.72 + Math.random() * 0.68);
+        dx = Math.cos(ang) * dist;
+        dy = Math.sin(ang) * dist + 8 + Math.random() * 12;
+        delay = Math.random() * 40;
+        size = 5 + Math.random() * 11;
+      } else {
+        ang = Math.random() * Math.PI * 2;
+        const rad = Math.random() * spread;
+        const speed = 12 + Math.random() * 22;
+        const lift = -(4 + Math.random() * 14);
+        px = x + Math.cos(ang) * rad * 0.35;
+        py = y + Math.sin(ang) * rad * 0.35;
+        dx = Math.cos(ang) * speed;
+        dy = lift + Math.sin(ang) * speed * 0.35 + 18 + Math.random() * 16;
+        delay = Math.random() * 60;
+        size = 4 + Math.random() * 9;
+      }
+
+      spawnDustPuff(layer, px, py, { size, delay, dx, dy });
     }
   }
 
@@ -3466,9 +3505,43 @@ body {
     return c * c * (3 - 2 * c);
   }
 
+  /** Random field for dithered dissolve (built once per wipe). */
+  function buildDissolveNoise(width, height, cellPx) {
+    const cw = Math.max(1, Math.ceil(width / cellPx));
+    const ch = Math.max(1, Math.ceil(height / cellPx));
+    const cells = new Uint8Array(cw * ch);
+    for (let i = 0; i < cells.length; i++) {
+      cells[i] = (Math.random() * 256) | 0;
+    }
+    return { cells, cw, ch, cellPx };
+  }
+
+  /** Punch holes through the remaining dirty pixels using a noise threshold. */
+  function applyRemainingDissolve(ctx, width, height, progress, noise, maskCanvas) {
+    if (progress <= 0 || !noise || !maskCanvas) return;
+    const thr = progress * 256;
+    const { cells, cw, ch } = noise;
+    const mctx = maskCanvas.getContext("2d");
+    const img = mctx.createImageData(cw, ch);
+    const d = img.data;
+    for (let i = 0, j = 0; i < cells.length; i++, j += 4) {
+      const cut = cells[i] < thr;
+      d[j] = 255;
+      d[j + 1] = 255;
+      d[j + 2] = 255;
+      d[j + 3] = cut ? 255 : 0;
+    }
+    mctx.putImageData(img, 0, 0);
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(maskCanvas, 0, 0, cw, ch, 0, 0, width, height);
+    ctx.restore();
+  }
+
   /**
    * Clears a piece: the icon's brush lifts off, sweeps side to side over a
-   * local area around the number kicking up dust clouds, and the rest of the
+   * local area around the number scattering paint drops, and the rest of the
    * piece dissolves as the brush finishes.
    * opts.startRect = where the icon brush was on screen (stage px).
    */
@@ -3586,6 +3659,11 @@ body {
     swept.height = height;
     const sweptCtx = swept.getContext("2d");
 
+    const dissolveNoise = buildDissolveNoise(width, height, DISSOLVE_CELL_PX);
+    const dissolveMask = document.createElement("canvas");
+    dissolveMask.width = dissolveNoise.cw;
+    dissolveMask.height = dissolveNoise.ch;
+
     const stampRadius = BRUSH_TRAIL_RADIUS_PX;
     const stamp = buildSpongeStamp(stampRadius);
     // The bristles leave a wide, flat trail.
@@ -3645,20 +3723,23 @@ body {
       return b;
     }
 
-    /** Dust clouds kicked up ahead of the bristles, drifting the way the brush moves. */
+    /** Colorful paint drops flicked from the bristles. */
     function emitPuffs(p) {
       const now = performance.now();
-      if (now - lastPuffAt < 45) return;
+      if (now - lastPuffAt < 48) return;
       lastPuffAt = now;
       const atTurn = p.turn > 0.85;
-      const count = atTurn ? 2 : 1 + (Math.random() < 0.5 ? 1 : 0);
+      const count = paintDropCount(
+        atTurn ? 4 : 2 + (Math.random() < 0.5 ? 1 : 0)
+      );
       for (let i = 0; i < count; i++) {
-        const ahead = p.dir * (stampRadius * (0.5 + Math.random() * 0.7));
-        const spreadY = (Math.random() - 0.5) * stampRadius * 1.3;
+        const ahead = p.dir * (stampRadius * (0.3 + Math.random() * 0.5));
+        const spreadY = (Math.random() - 0.5) * stampRadius * 0.85;
+        const side = (Math.random() - 0.5) * 16;
         spawnDustPuff(fxLayer, p.x + ahead, p.y + spreadY, {
-          size: 16 + Math.random() * (atTurn ? 26 : 18),
-          dx: p.dir * (28 + Math.random() * 40),
-          dy: -(8 + Math.random() * 24) + spreadY * 0.3,
+          size: 4 + Math.random() * (atTurn ? 8 : 6),
+          dx: p.dir * (10 + Math.random() * 18) + side,
+          dy: -(2 + Math.random() * 10) + 14 + Math.random() * 12,
         });
       }
     }
@@ -3681,11 +3762,10 @@ body {
       ctx.globalCompositeOperation = "destination-out";
       ctx.drawImage(swept, 0, 0);
 
-      // The rest of the piece (outside the brushed area) dissolves by the end.
+      // Un-brushed remainder dissolves (grainy fade) through the end of the wipe.
       if (t > BRUSH_FADE_START) {
         const f = smoothstep((t - BRUSH_FADE_START) / (1 - BRUSH_FADE_START));
-        ctx.fillStyle = `rgba(0,0,0,${f.toFixed(3)})`;
-        ctx.fillRect(0, 0, width, height);
+        applyRemainingDissolve(ctx, width, height, f, dissolveNoise, dissolveMask);
       }
       ctx.globalCompositeOperation = "source-over";
 
@@ -3757,13 +3837,14 @@ body {
       if (finished) return;
       renderFrame();
       if (wipeProgress() >= 1) {
-        // Last of the dust puffs off as the piece finishes.
+        // Paint drops splash 360° from the piece center.
         burstDustPuffs(
           vfxLayer,
           (area.minX + area.maxX) / 2,
           (area.minY + area.maxY) / 2,
-          7,
-          Math.min(area.width, area.height) * 0.35
+          18,
+          Math.min(area.width, area.height) * 0.62,
+          { radial: true }
         );
         playSpongeSparkles(bbox);
         cleanup();
@@ -3947,7 +4028,7 @@ body {
       const bbox = polygonBBox(poly);
       const ox = tapAt ? tapAt.x : (bbox.minX + bbox.maxX) / 2;
       const oy = tapAt ? tapAt.y : (bbox.minY + bbox.maxY) / 2;
-      burstDustPuffs(vfxLayer, ox, oy, 4, 18);
+      burstDustPuffs(vfxLayer, ox, oy, 14, 22);
     }
 
     startBrushWipe(cellId, () => {
@@ -4176,67 +4257,7 @@ body {
     kctx.fillStyle = "#fffbe6";
     kctx.fill();
 
-    const PAINT_COLORS = [
-      "#ff2d2d", "#ff8a00", "#ffe14a", "#3dce4a",
-      "#2ec8ff", "#3d6bff", "#b44dff", "#ff4fa3",
-    ];
-    /** Solid paint: a round bead and a teardrop whose tail points left. */
-    function makePaintPack(hex) {
-      const n = parseInt(hex.slice(1), 16);
-      const r = (n >> 16) & 255;
-      const g = (n >> 8) & 255;
-      const b = n & 255;
-      const fill = `rgb(${r},${g},${b})`;
-      const shade = `rgb(${Math.round(r * 0.62)},${Math.round(g * 0.62)},${Math.round(b * 0.62)})`;
-
-      const bead = document.createElement("canvas");
-      bead.width = bead.height = 64;
-      const bc = bead.getContext("2d");
-      bc.translate(32, 32);
-      bc.fillStyle = shade;
-      bc.beginPath();
-      bc.arc(1.5, 2, 22, 0, Math.PI * 2);
-      bc.fill();
-      bc.fillStyle = fill;
-      bc.beginPath();
-      bc.arc(0, 0, 19, 0, Math.PI * 2);
-      bc.fill();
-      bc.fillStyle = "rgba(255,255,255,0.75)";
-      bc.beginPath();
-      bc.ellipse(-6, -6, 6, 3.5, -0.7, 0, Math.PI * 2);
-      bc.fill();
-
-      const drop = document.createElement("canvas");
-      drop.width = 96;
-      drop.height = 64;
-      const dc = drop.getContext("2d");
-      // Short tail on the left, round bulb on the right (+X is the direction of flight).
-      dc.translate(62, 32);
-      dc.fillStyle = shade;
-      dc.beginPath();
-      dc.moveTo(-28, 0);
-      dc.bezierCurveTo(-8, -16, 2, -20, 16, 0);
-      dc.bezierCurveTo(2, 20, -8, 16, -28, 0);
-      dc.fill();
-      dc.fillStyle = fill;
-      dc.beginPath();
-      dc.moveTo(-22, 0);
-      dc.bezierCurveTo(-6, -13, 1, -16, 12, 0);
-      dc.bezierCurveTo(1, 16, -6, 13, -22, 0);
-      dc.fill();
-      dc.fillStyle = "rgba(255,255,255,0.85)";
-      dc.beginPath();
-      dc.ellipse(3, -5, 5, 3, -0.4, 0, Math.PI * 2);
-      dc.fill();
-      return { drop, bead };
-    }
-
-    fireworkSprites = {
-      dust,
-      star,
-      spark,
-      paint: PAINT_COLORS.map(makePaintPack),
-    };
+    fireworkSprites = { dust, star, spark };
     return fireworkSprites;
   }
 
@@ -4280,67 +4301,6 @@ body {
     const particles = [];
     const emitted = { star: 0, spark: 0, dust: 0 };
     const totals = { star: RAIN_STARS, spark: RAIN_SPARKLES, dust: RAIN_DUST };
-    const paint = [];
-    const paintBursts = [];
-    const burstX = [0.18, 0.42, 0.66, 0.84, 0.3, 0.55, 0.74, 0.22];
-    const burstY = [0.3, 0.22, 0.36, 0.26, 0.44, 0.32, 0.48, 0.38];
-    for (let i = 0; i < 8; i++) {
-      paintBursts.push({
-        at: 0.05 + (i % 4) * 0.32,
-        color: i % sprites.paint.length,
-        x: width * burstX[i],
-        y: height * burstY[i],
-        rise: 170 + (i % 3) * 36,
-      });
-    }
-    let burstCursor = 0;
-
-    /** A streak of paint climbs, then pops into a burst of coloured splashes. */
-    function launchPaintFirework(b) {
-      paint.push({
-        kind: "rocket",
-        sprite: sprites.paint[b.color].bead,
-        shape: "bead",
-        x: b.x + (Math.random() - 0.5) * 36,
-        y: Math.min(height - 8, b.y + b.rise),
-        targetX: b.x,
-        targetY: b.y,
-        size: 22,
-        life: 0.42,
-        age: 0,
-        rot: -Math.PI / 2,
-        vr: 0,
-        gravity: 0,
-        drag: 0,
-        trail: 0,
-        burst: b,
-      });
-    }
-
-    function explodePaint(b) {
-      const pack = sprites.paint[b.color];
-      const drops = 56;
-      for (let i = 0; i < drops; i++) {
-        const ang = Math.random() * Math.PI * 2;
-        const speed = 70 + Math.random() * 320;
-        const bead = Math.random() < 0.55;
-        const big = !bead && Math.random() < 0.28;
-        paint.push({
-          kind: "drop",
-          shape: bead ? "bead" : "drop",
-          sprite: bead ? pack.bead : pack.drop,
-          x: b.x + Math.cos(ang) * Math.random() * 10,
-          y: b.y + Math.sin(ang) * Math.random() * 10,
-          vx: Math.cos(ang) * speed,
-          vy: Math.sin(ang) * speed - 30,
-          size: big ? 22 + Math.random() * 14 : bead ? 8 + Math.random() * 10 : 14 + Math.random() * 10,
-          life: 0.9 + Math.random() * 0.45,
-          age: 0,
-          gravity: 520 + Math.random() * 160,
-          drag: 0.45,
-        });
-      }
-    }
 
     function spawn(type) {
       const base = {
@@ -4509,12 +4469,6 @@ body {
       // Spotlight beams are off. `off` still lets the layer finish when the reward screen arrives.
       const off = beamsOffAt ? 0 : 1;
 
-      if (!stopAt) {
-        while (burstCursor < paintBursts.length && t >= paintBursts[burstCursor].at) {
-          launchPaintFirework(paintBursts[burstCursor]);
-          burstCursor += 1;
-        }
-      }
       // Falling stars, sparkles and dust.
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
@@ -4565,74 +4519,8 @@ body {
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
 
-
-      for (let i = paint.length - 1; i >= 0; i--) {
-        const p = paint[i];
-        p.age += dt;
-        if (p.kind === "rocket") {
-          const u = Math.min(1, p.age / p.life);
-          const ease = 1 - (1 - u) * (1 - u);
-          const startX = p.burst.x;
-          const startY = p.burst.y + p.burst.rise;
-          p.x = startX + (p.targetX - startX) * ease;
-          p.y = startY + (p.targetY - startY) * ease;
-          p.trail += dt;
-          if (p.trail > 0.028) {
-            p.trail = 0;
-            paint.push({
-              kind: "drop",
-              shape: "bead",
-              sprite: p.sprite,
-              x: p.x,
-              y: p.y,
-              vx: (Math.random() - 0.5) * 24,
-              vy: 30 + Math.random() * 40,
-              size: 5 + Math.random() * 5,
-              life: 0.45,
-              age: 0,
-              gravity: 480,
-              drag: 0.3,
-            });
-          }
-          ctx.globalCompositeOperation = "source-over";
-          ctx.globalAlpha = 1;
-          ctx.drawImage(p.sprite, p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
-          if (u >= 1) {
-            explodePaint(p.burst);
-            paint.splice(i, 1);
-          }
-          continue;
-        }
-        if (p.age >= p.life) {
-          paint.splice(i, 1);
-          continue;
-        }
-        p.vx *= Math.exp(-p.drag * dt);
-        p.vy = p.vy * Math.exp(-p.drag * 0.2 * dt) + p.gravity * dt;
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        const u = p.age / p.life;
-        const fadeOut = u < 0.72 ? 1 : 1 - smoothstep((u - 0.72) / 0.28);
-        const speed = Math.hypot(p.vx, p.vy);
-        const stretch = p.shape === "bead" ? 1 : 1 + Math.min(0.45, speed / 700);
-        const squash = p.shape === "bead" ? 1 : Math.max(0.72, 1 - (stretch - 1) * 0.4);
-        ctx.globalCompositeOperation = "source-over";
-        ctx.globalAlpha = Math.max(0, fadeOut);
-        ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(Math.atan2(p.vy, p.vx));
-        ctx.scale(stretch, squash);
-        if (p.shape === "bead") {
-          ctx.drawImage(p.sprite, -p.size / 2, -p.size / 2, p.size, p.size);
-        } else {
-          const w = p.size * 1.45;
-          ctx.drawImage(p.sprite, -w * 0.62, -p.size / 2, w, p.size);
-        }
-        ctx.restore();
-      }
-      ctx.globalAlpha = 1;
       // Once the beams are gone and the last star has fallen, the layer is done.
-      if ((t > BEAM_TOTAL_S || off <= 0) && !particles.length && !paint.length && burstCursor >= paintBursts.length && t > STAR_RAIN_S) {
+      if ((t > BEAM_TOTAL_S || off <= 0) && !particles.length && t > STAR_RAIN_S) {
         remove();
         return;
       }
